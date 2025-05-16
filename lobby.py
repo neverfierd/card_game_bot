@@ -55,61 +55,51 @@ class Lobby:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _update_player_ui(self, player_id: int):
-        """Обновляет интерфейс игрока с максимальной защитой от ошибок"""
         try:
-            # 1. Получаем состояние игры с защитой от None
-            state = self.game.get_state(player_id) if self.game else None
-            if not state:
-                state = {
-                    'hand': [],
-                    'table': [],
-                    'trump': "♦6",
-                    'is_my_turn': False,
-                    'allowed_actions': [],
-                    'players': []
-                }
+            # Получаем состояние с защитой от None
+            state = self.game.get_state(player_id) if self.game else {}
+            state.setdefault('hand', [])
+            state.setdefault('table', [])
+            state.setdefault('trump', "♦6")
+            state.setdefault('is_my_turn', False)
+            state.setdefault('allowed_actions', [])
+            state.setdefault('throwable_cards', [])
 
-            # 2. Формируем текст с защитой для каждой карты
+            # Формируем текст с полной защитой
             hand_text = "\n".join(
                 f"{i}. {getattr(card, 'rank', '?')}{getattr(card, 'suit', '?')}"
-                for i, card in enumerate(state.get('hand', []))
+                for i, card in enumerate(state['hand'])
                 if card is not None
             ) or "Нет карт"
 
-            # 3. Формируем текст для стола с защитой
             table_text = "\n".join(
                 f"{getattr(a, 'rank', '?')}{getattr(a, 'suit', '?')} → "
                 f"{getattr(d, 'rank', '?')}{getattr(d, 'suit', '?') if d else '?'}"
-                for a, d in state.get('table', [])
+                for a, d in state['table']
                 if a is not None
             ) or "Стол пуст"
 
-            # 4. Собираем полное сообщение
             text = (
                 f"🃏 Козырь: {state.get('trump', '♦6')}\n\n"
                 f"Ваши карты:\n{hand_text}\n\n"
                 f"Стол:\n{table_text}\n\n"
             )
 
-            if state.get('is_my_turn', False):
+            if state['is_my_turn']:
                 text += "✨ Ваш ход!\n"
 
             if self.game and self.game.is_game_over():
                 winner = self.game.get_winner()
-                status = "Ничья!" if winner is None else f"Победитель: {winner}"
-                text += f"🎉 Игра окончена! {status}"
+                text += f"🎉 Игра окончена! {'Ничья!' if winner is None else f'Победитель: {winner}'}"
 
-            # 5. Создаем клавиатуру с защитой
-            kb = self._create_keyboard(state.get('allowed_actions', []))
+            kb = self._create_keyboard(player_id, state)
 
-            # 6. Удаляем старое сообщение (если есть)
-            if player_id in self.last_messages:
-                try:
+            try:
+                if player_id in self.last_messages:
                     await self.bot.delete_message(player_id, self.last_messages[player_id])
-                except:
-                    pass
+            except:
+                pass
 
-            # 7. Отправляем новое сообщение
             msg = await self.bot.send_message(
                 chat_id=player_id,
                 text=text,
@@ -118,51 +108,69 @@ class Lobby:
             self.last_messages[player_id] = msg.message_id
 
         except Exception as e:
-            print(f"Критическая ошибка UI для {player_id}: {e}")
+            print(f"Ошибка UI (fixed): {player_id} - {str(e)}")
             try:
                 await self.bot.send_message(
                     chat_id=player_id,
-                    text="🛠 Произошла ошибка отображения. Игра продолжается..."
+                    text="♻ Обновление интерфейса..."
                 )
             except:
                 pass
 
-    def _create_keyboard(self, actions: List[str]) -> types.InlineKeyboardMarkup:
+    def _create_keyboard(self, player_id: int, state: dict) -> types.InlineKeyboardMarkup:
         kb = types.InlineKeyboardMarkup(inline_keyboard=[])
-        for action in actions:
-            if action.isdigit():
-                kb.inline_keyboard.append([
-                    types.InlineKeyboardButton(text=f"Карта {action}", callback_data=f"play_{action}")
-                ])
-            elif action == "pass":
-                kb.inline_keyboard.append([
-                    types.InlineKeyboardButton(text="⏩ Пас", callback_data="play_pass")
-                ])
-            elif action == "take":
-                kb.inline_keyboard.append([
-                    types.InlineKeyboardButton(text="🖐 Взять", callback_data="play_take")
-                ])
-        return kb
 
-    def _format_state(self, state: dict) -> str:
-        text = f"🃏 Козырь: {state['trump']}\n\nВаши карты:\n"
-        text += "\n".join(f"{i}. {card.rank}{card.suit}" for i, card in enumerate(state['hand']))
+        state.setdefault('hand', [])
+        state.setdefault('allowed_actions', [])
 
-        if state['table']:
-            text += "\n\nСтол:\n" + "\n".join(
-                f"{a.rank}{a.suit} → {d.rank}{d.suit if d else '?'}"
-                for a, d in state['table']
+        card_buttons = []
+        for i, card in enumerate(state['hand']):
+            if card is None:
+                continue
+
+            card_text = f"{getattr(card, 'rank', '?')}{getattr(card, 'suit', '?')}"
+
+            if str(i) in state['allowed_actions']:
+                card_buttons.append(
+                    types.InlineKeyboardButton(
+                        text=card_text,
+                        callback_data=f"play_{i}"
+                    )
+                )
+
+        if card_buttons:
+            kb.inline_keyboard.append(card_buttons)
+
+        action_buttons = []
+
+        if ("pass" in state.get('allowed_actions', []) and
+                state.get('is_my_turn', False)):
+            action_buttons.append(
+                types.InlineKeyboardButton(
+                    text="✅ Бито (все покрыто)",
+                    callback_data="play_pass"
+                )
             )
 
-        if state['is_my_turn']:
-            text += "\n\n✨ Ваш ход!"
+        if "take" in state.get('allowed_actions', []):
+            action_buttons.append(
+                types.InlineKeyboardButton(
+                    text="🖐 Взять карты",
+                    callback_data="play_take"
+                )
+            )
 
-        if self.game and self.game.is_game_over():
-            winner = self.game.get_winner()
-            status = "Ничья!" if winner is None else f"Победитель: {winner}"
-            text += f"\n\n🎉 Игра окончена! {status}"
+        action_buttons.append(
+            types.InlineKeyboardButton(
+                text="🚪 Выйти",
+                callback_data="lobby_leave"
+            )
+        )
 
-        return text
+        if action_buttons:
+            kb.inline_keyboard.append(action_buttons)
+
+        return kb
 
 
 class LobbyManager:
@@ -171,11 +179,16 @@ class LobbyManager:
         self.lobbies: Dict[int, Lobby] = {}
         self.user_lobbies: Dict[int, int] = {}
 
-    async def create_lobby(self, owner_id: int) -> Optional[Lobby]:
+    async def create_lobby(self, owner_id: int, lobby_id: Optional[int] = None) -> Optional[Lobby]:
         if owner_id in self.user_lobbies:
             return None
 
-        lobby_id = len(self.lobbies) + 1
+        if lobby_id is None:
+            lobby_id = len(self.lobbies) + 1
+
+        if lobby_id in self.lobbies:
+            return None
+
         self.lobbies[lobby_id] = Lobby(lobby_id, owner_id, self.bot)
         self.user_lobbies[owner_id] = lobby_id
         return self.lobbies[lobby_id]

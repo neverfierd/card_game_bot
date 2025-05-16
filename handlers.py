@@ -66,18 +66,27 @@ def setup_handlers(router: Router, manager: 'LobbyManager'):
 
     @router.callback_query(F.data.startswith("play_"))
     async def game_action(callback: types.CallbackQuery):
-        lobby = manager.get_user_lobby(callback.from_user.id)
-        if not lobby or not lobby.game:
-            await callback.answer("Игра не найдена")
-            return
+        try:
+            lobby = manager.get_user_lobby(callback.from_user.id)
+            if not lobby or not lobby.game:
+                await callback.answer("Игра не найдена")
+                return
 
-        action = callback.data.replace("play_", "")
-        success = await lobby.process_action(callback.from_user.id, action)
+            action = callback.data.replace("play_", "")
+            if not action:
+                await callback.answer("Неверное действие")
+                return
 
-        if success:
-            await callback.answer()
-        else:
-            await callback.answer("Недопустимое действие!", show_alert=True)
+            success = await lobby.process_action(callback.from_user.id, action)
+
+            if success:
+                await lobby._update_ui_all()
+                await callback.answer()
+            else:
+                await callback.answer("Недопустимое действие!", show_alert=True)
+        except Exception as e:
+            print(f"Game action error: {e}")
+            await callback.answer("Ошибка обработки действия", show_alert=True)
 
     @router.message()
     async def lobby_chat(message: types.Message):
